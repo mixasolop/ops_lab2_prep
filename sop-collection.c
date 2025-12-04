@@ -14,6 +14,7 @@
    kill(0, SIGKILL), exit(EXIT_FAILURE))
 
 #define ITER_COUNT 25
+volatile sig_atomic_t last_sig;
 
 ssize_t bulk_read(int fd, char *buf, size_t count) {
   ssize_t c;
@@ -80,7 +81,7 @@ void child_work() {
   close(fd);
 }
 
-void create_n_children(int n, pid_t *arr) {
+void create_n_collection_boxes(int n, pid_t *arr) {
   for (int i = 0; i < n; i++) {
     pid_t pid = fork();
     arr[i] = pid;
@@ -94,6 +95,62 @@ void create_n_children(int n, pid_t *arr) {
   }
 }
 
+void sig_handler(int sig) { last_sig = sig; }
+
+void donor_work() {
+  sethandler(sig_handler, SIGUSR1);
+  sethandler(sig_handler, SIGUSR2);
+  sethandler(sig_handler, SIGPIPE);
+  sethandler(sig_handler, SIGINT);
+
+  sigset_t mask, oldmask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGUSR1);
+  sigaddset(&mask, SIGUSR2);
+  sigaddset(&mask, SIGPIPE);
+  sigaddset(&mask, SIGINT);
+  sigprocmask(SIG_BLOCK, &mask, &oldmask);
+  int box_num;
+  while (sigsuspend(&oldmask)) {
+    if (last_sig == SIGUSR1) {
+      box_num = 0;
+      break;
+    }
+    if (last_sig == SIGUSR2) {
+      box_num = 1;
+      break;
+    }
+    if (last_sig == SIGPIPE) {
+      box_num = 2;
+      break;
+    }
+    if (last_sig == SIGINT) {
+      box_num = 3;
+      break;
+    }
+  }
+  printf("[%d] Directed to collection box no %d\n", getpid(), box_num);
+}
+
+void create_donors() {
+  srand(getpid());
+  int sig_arr[4] = {SIGUSR1, SIGUSR2, SIGPIPE, SIGINT};
+  for (int i = 0; i < ITER_COUNT; i++) {
+    pid_t pid = fork();
+    if (pid == -1) {
+      ERR("fork");
+    }
+    if (pid == 0) {
+      donor_work();
+      exit(EXIT_SUCCESS);
+    }
+    ms_sleep(100);
+    kill(pid, sig_arr[rand() % 4]);
+    while (waitpid(pid, NULL, 0) != pid) {
+    }
+  }
+}
+
 int main(int argc, char *argv[]) {
   if (argc != 2) {
     usage(argc, argv);
@@ -103,7 +160,8 @@ int main(int argc, char *argv[]) {
     usage(argc, argv);
   }
   pid_t children_pid[num];
-  create_n_children(num, children_pid);
+  create_n_collection_boxes(num, children_pid);
+  create_donors();
   while (wait(NULL) > 0) {
   }
   printf("Collection ended!");
