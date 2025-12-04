@@ -70,13 +70,38 @@ void usage(int argc, char *argv[]) {
   exit(EXIT_FAILURE);
 }
 
-void child_work() {
+void sig_handler(int sig) { last_sig = sig; }
+
+void collection_box_work() {
+  int total_collected = 0;
+  sethandler(sig_handler, SIGUSR1);
+  sigset_t mask, oldmask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGUSR1);
+  sigprocmask(SIG_BLOCK, &mask, &oldmask);
   printf("[%d] Collection box opened\n", getpid());
   char buf[69];
   snprintf(buf, 67, "skarbona_%d", getpid());
-  int fd = open(buf, O_CREAT | O_TRUNC);
+  int fd = open(buf, O_CREAT | O_TRUNC | O_RDONLY, 0644);
   if (fd == -1) {
     ERR("open");
+  }
+  int donation;
+  int pid;
+  while (sigsuspend(&oldmask)) {
+    if (last_sig == SIGUSR1) {
+      lseek(fd, -8, SEEK_END);
+      if (bulk_read(fd, (char*)&donation, sizeof(int)) == -1) {
+        ERR("bulk_read");
+      }
+      if (bulk_read(fd, (char*)&pid, sizeof(int)) == -1) {
+        ERR("bulk_read");
+      }
+      total_collected += donation;
+      printf(
+          "[%d] Citizen %d threw in %d PLN. Thank you! Total collected: %d PLN\n",
+          getpid(), pid, donation, total_collected);
+    }
   }
   close(fd);
 }
@@ -89,15 +114,14 @@ void create_n_collection_boxes(int n, pid_t *arr) {
       ERR("fork");
     }
     if (pid == 0) {
-      child_work();
+      collection_box_work();
       exit(EXIT_SUCCESS);
     }
   }
 }
 
-void sig_handler(int sig) { last_sig = sig; }
-
-void donor_work() {
+void donor_work(int n, pid_t *arr) {
+  srand(getpid());
   sethandler(sig_handler, SIGUSR1);
   sethandler(sig_handler, SIGUSR2);
   sethandler(sig_handler, SIGPIPE);
@@ -130,9 +154,32 @@ void donor_work() {
     }
   }
   printf("[%d] Directed to collection box no %d\n", getpid(), box_num);
+  
+  if (n <= box_num) {
+    printf("[%d] Nothing here, I'm going home!\n", getpid());
+    return;
+  }
+  char buf[69];
+  snprintf(buf, 67, "skarbona_%d", arr[box_num]);
+  int fd = open(buf, O_APPEND | O_WRONLY);
+  if (fd == -1) {
+    ERR("open");
+  }
+  int donation = (rand() % 1901) + 100;
+  if (write(fd, &donation, sizeof(int)) == -1) {
+    ERR("write");
+  }
+  int curr_pid = getpid();
+  if (write(fd, &curr_pid, sizeof(int)) == -1) {
+    ERR("write");
+  }
+  close(fd);
+
+  printf("[%d] I'm throwing in %d PLN\n", curr_pid, donation);
+  kill(arr[box_num], SIGUSR1);
 }
 
-void create_donors() {
+void create_donors(int num, pid_t *arr) {
   srand(getpid());
   int sig_arr[4] = {SIGUSR1, SIGUSR2, SIGPIPE, SIGINT};
   for (int i = 0; i < ITER_COUNT; i++) {
@@ -141,7 +188,7 @@ void create_donors() {
       ERR("fork");
     }
     if (pid == 0) {
-      donor_work();
+      donor_work(num, arr);
       exit(EXIT_SUCCESS);
     }
     ms_sleep(100);
@@ -161,8 +208,11 @@ int main(int argc, char *argv[]) {
   }
   pid_t children_pid[num];
   create_n_collection_boxes(num, children_pid);
-  create_donors();
+  create_donors(num, children_pid);
+  for (int i = 0; i < num; i++) {
+    kill(children_pid[i], SIGTERM);
+  }
   while (wait(NULL) > 0) {
   }
-  printf("Collection ended!");
+  printf("Collection ended!\n");
 }
