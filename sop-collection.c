@@ -230,3 +230,9 @@ int main(int argc, char *argv[]) {
   }
   printf("Collection ended!\n");
 }
+
+
+
+// Process	Condition	  pid value	      pid1 = getpid() gives
+// Parent	     pid > 0	    child's PID	         parent PID
+// Child	     pid == 0	            0	                  child PID
